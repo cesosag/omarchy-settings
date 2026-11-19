@@ -5,10 +5,10 @@ Schema-driven **Settings** GUI for [Omarchy](https://omarchy.org): edit Setup su
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/cesosag/cesosag.settings.git --enable
+omarchy plugin add https://github.com/cesosag/omarchy-settings.git --enable
 ```
 
-Then either open the panel once (it self-wires the Setup menu) or run:
+Plugin id remains `cesosag.settings` (the `omarchy.*` namespace is reserved). After add, open the panel once (it self-wires the Setup menu) or run:
 
 ```bash
 ~/.config/omarchy/plugins/cesosag.settings/bin/install
