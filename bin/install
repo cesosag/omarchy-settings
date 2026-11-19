@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Wire the plugin after `omarchy plugin add` (enable + Setup menu overrides).
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "$DIR/settings" ensure

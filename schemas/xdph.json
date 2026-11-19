@@ -1,0 +1,29 @@
+{
+  "id": "xdph",
+  "kind": "form",
+  "titleKey": "xdph.title",
+  "descriptionKey": "xdph.description",
+  "backend": "xdph",
+  "customNoteKey": "xdph.customNote",
+  "editors": [
+    { "labelKey": "xdph.openEditor", "path": "~/.config/hypr/xdph.conf" }
+  ],
+  "fields": [
+    { "type": "section", "titleKey": "xdph.sectionScreencopy" },
+    {
+      "key": "allow_token_by_default",
+      "type": "bool",
+      "labelKey": "xdph.allowToken",
+      "descriptionKey": "xdph.allowTokenDesc",
+      "default": true
+    },
+    {
+      "key": "custom_picker_binary",
+      "type": "string",
+      "labelKey": "xdph.picker",
+      "descriptionKey": "xdph.pickerDesc",
+      "placeholder": "hyprland-preview-share-picker",
+      "default": "hyprland-preview-share-picker"
+    }
+  ]
+}

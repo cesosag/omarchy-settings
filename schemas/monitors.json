@@ -1,0 +1,7 @@
+{
+  "id": "monitors",
+  "kind": "view",
+  "view": "MonitorsPage",
+  "titleKey": "monitors.title",
+  "descriptionKey": "monitors.description"
+}

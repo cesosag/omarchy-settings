@@ -1,0 +1,105 @@
+{
+  "id": "hyprland",
+  "kind": "form",
+  "titleKey": "hyprland.title",
+  "descriptionKey": "hyprland.description",
+  "backend": "hyprland-compose",
+  "customNoteKey": "hyprland.customNote",
+  "editors": [
+    { "labelKey": "hyprland.openEditor", "path": "~/.config/hypr/hyprland.lua" },
+    { "labelKey": "hyprland.openLookEditor", "path": "~/.config/hypr/looknfeel.lua" }
+  ],
+  "fields": [
+    { "type": "section", "titleKey": "hyprland.sectionBindings" },
+    {
+      "key": "defaultBindings",
+      "type": "bool",
+      "labelKey": "hyprland.defaultBindings",
+      "descriptionKey": "hyprland.defaultBindingsDesc",
+      "backend": "hyprland",
+      "default": true
+    },
+    {
+      "key": "preinstalledBindings",
+      "type": "bool",
+      "labelKey": "hyprland.preinstalledBindings",
+      "descriptionKey": "hyprland.preinstalledBindingsDesc",
+      "backend": "hyprland",
+      "default": true
+    },
+    { "type": "section", "titleKey": "hyprland.sectionLook" },
+    {
+      "key": "layout",
+      "type": "enum",
+      "labelKey": "hyprland.layout",
+      "backend": "looknfeel",
+      "options": ["dwindle", "master", "scrolling"],
+      "default": "dwindle"
+    },
+    {
+      "key": "gaps_in",
+      "type": "int",
+      "labelKey": "hyprland.gapsIn",
+      "backend": "looknfeel",
+      "default": 5,
+      "min": 0
+    },
+    {
+      "key": "gaps_out",
+      "type": "int",
+      "labelKey": "hyprland.gapsOut",
+      "backend": "looknfeel",
+      "default": 10,
+      "min": 0
+    },
+    {
+      "key": "border_size",
+      "type": "int",
+      "labelKey": "hyprland.borderSize",
+      "backend": "looknfeel",
+      "default": 2,
+      "min": 0
+    },
+    {
+      "key": "rounding",
+      "type": "int",
+      "labelKey": "hyprland.rounding",
+      "backend": "looknfeel",
+      "default": 0,
+      "min": 0
+    },
+    {
+      "key": "resize_on_border",
+      "type": "bool",
+      "labelKey": "hyprland.resizeOnBorder",
+      "descriptionKey": "hyprland.resizeOnBorderDesc",
+      "backend": "looknfeel",
+      "default": true
+    },
+    {
+      "key": "dim_inactive",
+      "type": "bool",
+      "labelKey": "hyprland.dimInactive",
+      "descriptionKey": "hyprland.dimInactiveDesc",
+      "backend": "looknfeel",
+      "default": false
+    },
+    {
+      "key": "dim_strength",
+      "type": "number",
+      "labelKey": "hyprland.dimStrength",
+      "backend": "looknfeel",
+      "default": 0.15,
+      "visibleWhen": { "key": "dim_inactive", "equals": true },
+      "placeholder": "0.15"
+    },
+    {
+      "key": "animations",
+      "type": "bool",
+      "labelKey": "hyprland.animations",
+      "descriptionKey": "hyprland.animationsDesc",
+      "backend": "looknfeel",
+      "default": true
+    }
+  ]
+}

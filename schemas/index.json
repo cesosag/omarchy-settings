@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "cesosag.settings",
+  "sections": [
+    {
+      "id": "shell",
+      "schema": "shell.json",
+      "navKey": "nav.shell",
+      "menuId": "setup.idle",
+      "icon": "󰒲"
+    },
+    {
+      "id": "monitors",
+      "schema": "monitors.json",
+      "navKey": "nav.monitors",
+      "menuId": "setup.monitors",
+      "icon": "󰍹"
+    },
+    {
+      "id": "input",
+      "schema": "input.json",
+      "navKey": "nav.input",
+      "menuId": "setup.input",
+      "icon": ""
+    },
+    {
+      "id": "keybindings",
+      "schema": "keybindings.json",
+      "navKey": "nav.keybindings",
+      "menuId": "setup.keybindings",
+      "icon": ""
+    },
+    {
+      "id": "hyprland",
+      "schema": "hyprland.json",
+      "navKey": "nav.hyprland",
+      "menuId": "setup.config.hyprland",
+      "icon": ""
+    },
+    {
+      "id": "hyprsunset",
+      "schema": "hyprsunset.json",
+      "navKey": "nav.hyprsunset",
+      "menuId": "setup.config.hyprsunset",
+      "icon": ""
+    },
+    {
+      "id": "xdph",
+      "schema": "xdph.json",
+      "navKey": "nav.xdph",
+      "menuId": "setup.config.xdph",
+      "icon": "󰹑"
+    }
+  ]
+}

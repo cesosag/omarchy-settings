@@ -1,0 +1,50 @@
+{
+  "id": "shell",
+  "kind": "form",
+  "titleKey": "idle.title",
+  "descriptionKey": "idle.description",
+  "backend": "shell",
+  "editors": [
+    { "labelKey": "idle.openEditor", "path": "~/.config/omarchy/shell.json" }
+  ],
+  "fields": [
+    { "type": "section", "titleKey": "idle.sectionIdle" },
+    {
+      "key": "screensaverMinutes",
+      "type": "int",
+      "labelKey": "idle.screensaver",
+      "min": 0
+    },
+    {
+      "key": "lockMinutes",
+      "type": "int",
+      "labelKey": "idle.lock",
+      "min": 0
+    },
+    { "type": "section", "titleKey": "idle.sectionDock" },
+    {
+      "key": "dockPosition",
+      "type": "enum",
+      "labelKey": "idle.dockPosition",
+      "options": ["top", "bottom", "left", "right"]
+    },
+    {
+      "key": "dockAutohide",
+      "type": "bool",
+      "labelKey": "idle.dockAutohide"
+    },
+    { "type": "section", "titleKey": "idle.sectionBar" },
+    {
+      "key": "barPosition",
+      "type": "enum",
+      "labelKey": "idle.barPosition",
+      "options": ["top", "bottom", "left", "right"]
+    },
+    {
+      "key": "barBackground",
+      "type": "enum",
+      "labelKey": "idle.barBackground",
+      "options": ["opaque", "glassy", "none"]
+    }
+  ]
+}

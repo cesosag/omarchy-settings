@@ -1,0 +1,780 @@
+#!/usr/bin/env python3
+"""Read/write GUI-managed sections of Omarchy Hyprland Lua configs.
+
+Preserves user custom Lua between:
+  -- >>> cesosag.settings:custom
+  -- <<< cesosag.settings:custom
+
+Usage:
+  lua-settings get <input|bindings|bindings-catalog|hyprland|looknfeel>
+  lua-settings set <input|bindings|bindings-catalog|hyprland|looknfeel> '<json>'
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bindings_catalog  # noqa: E402
+
+HOME = Path(os.path.expanduser("~"))
+HYPR = HOME / ".config" / "hypr"
+CUSTOM_BEGIN = "-- >>> cesosag.settings:custom"
+CUSTOM_END = "-- <<< cesosag.settings:custom"
+
+PATHS = {
+    "input": HYPR / "input.lua",
+    "bindings": HYPR / "bindings.lua",
+    "bindings-catalog": HYPR / "bindings.lua",
+    "hyprland": HYPR / "hyprland.lua",
+    "looknfeel": HYPR / "looknfeel.lua",
+}
+
+
+def fail(msg: str, code: int = 1) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def backup(path: Path) -> None:
+    if path.is_file():
+        shutil.copy2(path, path.with_name(path.name + f".bak.{int(time.time())}"))
+
+
+def split_custom(text: str) -> tuple[str, str]:
+    if CUSTOM_BEGIN in text and CUSTOM_END in text:
+        before, rest = text.split(CUSTOM_BEGIN, 1)
+        custom, after = rest.split(CUSTOM_END, 1)
+        return before, custom.strip("\n")
+    return text, ""
+
+
+def wrap_custom(custom: str) -> str:
+    custom = custom.strip("\n")
+    if not custom.strip():
+        return ""
+    return f"\n{CUSTOM_BEGIN}\n{custom}\n{CUSTOM_END}\n"
+
+
+def write_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
+
+
+def hypr_reload() -> None:
+    subprocess.run(["hyprctl", "reload"], check=False, capture_output=True)
+
+
+# ---- input -----------------------------------------------------------------
+
+INPUT_DEFAULTS = {
+    "natural_scroll": None,
+    "clickfinger_behavior": None,
+    "scroll_factor": None,
+    "drag_3fg": None,
+    "disable_while_typing": None,
+    "sensitivity": None,
+    "accel_profile": None,
+    "repeat_rate": None,
+    "repeat_delay": None,
+    "numlock_by_default": None,
+    "workspace_gesture": False,
+}
+
+
+def _lua_literal(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+    return json.dumps(str(value))
+
+
+def active_lines(text: str) -> str:
+    """Keep only uncommented code lines (strip full-line and trailing -- comments)."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("--"):
+            continue
+        # Drop trailing Lua comments outside strings (good enough for these files).
+        if "--" in line:
+            in_str = False
+            buf = []
+            i = 0
+            while i < len(line):
+                ch = line[i]
+                if ch == '"' and (i == 0 or line[i - 1] != "\\"):
+                    in_str = not in_str
+                    buf.append(ch)
+                elif not in_str and ch == "-" and i + 1 < len(line) and line[i + 1] == "-":
+                    break
+                else:
+                    buf.append(ch)
+                i += 1
+            line = "".join(buf).rstrip()
+        if line.strip():
+            out.append(line)
+    return "\n".join(out)
+
+
+def parse_input(text: str) -> dict:
+    data = dict(INPUT_DEFAULTS)
+    managed, custom = split_custom(text)
+    source = active_lines(managed if CUSTOM_BEGIN in text else text)
+
+    keys = {
+        "natural_scroll": "bool",
+        "clickfinger_behavior": "bool",
+        "disable_while_typing": "bool",
+        "numlock_by_default": "bool",
+        "drag_3fg": "number",
+        "scroll_factor": "number",
+        "sensitivity": "number",
+        "repeat_rate": "number",
+        "repeat_delay": "number",
+        "accel_profile": "string",
+    }
+    for key, kind in keys.items():
+        if kind == "bool":
+            m = re.search(rf"\b{key}\s*=\s*(true|false)\b", source)
+            if m:
+                data[key] = m.group(1) == "true"
+        elif kind == "number":
+            m = re.search(rf"\b{key}\s*=\s*(-?\d+(?:\.\d+)?)\b", source)
+            if m:
+                num = m.group(1)
+                data[key] = float(num) if "." in num else int(num)
+        else:
+            m = re.search(rf'\b{key}\s*=\s*"([^"]*)"', source)
+            if m:
+                data[key] = m.group(1)
+
+    if re.search(
+        r'hl\.gesture\(\s*\{\s*fingers\s*=\s*3\s*,\s*direction\s*=\s*"horizontal"\s*,\s*action\s*=\s*"workspace"(?:\s*,\s*scale\s*=\s*[\d.]+)?\s*\}\s*\)',
+        source,
+    ):
+        data["workspace_gesture"] = True
+
+    data["_custom"] = custom if CUSTOM_BEGIN in text else ""
+    data["_has_markers"] = CUSTOM_BEGIN in text
+    return data
+
+
+def migrate_input_custom(text: str) -> str:
+    """Strip the first uncommented hl.config({input=...}) and workspace gesture we manage."""
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+        return custom
+
+    # Remove managed workspace gesture (optional scale) and swipe-distance config.
+    text = re.sub(
+        r'\nhl\.gesture\(\s*\{\s*fingers\s*=\s*3\s*,\s*direction\s*=\s*"horizontal"\s*,\s*action\s*=\s*"workspace"(?:\s*,\s*scale\s*=\s*[\d.]+)?\s*\}\s*\)\s*',
+        "\n",
+        text,
+    )
+    text = re.sub(
+        r'\nhl\.config\(\{\s*gestures\s*=\s*\{\s*workspace_swipe_distance\s*=\s*\d+\s*,?\s*\}\s*,?\s*\}\)\s*',
+        "\n",
+        text,
+    )
+
+    # Remove first top-level uncommented hl.config({ ... input ... })
+    # Match from hl.config({ to the balancing }); naive but good enough for Omarchy templates.
+    m = re.search(r"(?m)^hl\.config\(\{", text)
+    if m:
+        start = m.start()
+        i = m.end() - 1  # at '{'
+        depth = 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    # consume trailing )
+                    end = i + 1
+                    if end < len(text) and text[end] == ")":
+                        end += 1
+                    while end < len(text) and text[end] in " \t":
+                        end += 1
+                    if end < len(text) and text[end] == ";":
+                        end += 1
+                    if end < len(text) and text[end] == "\n":
+                        end += 1
+                    text = text[:start] + text[end:]
+                    break
+            i += 1
+
+    return text.strip("\n")
+
+
+def render_input(settings: dict, custom: str) -> str:
+    lines = [
+        "-- Input settings managed by the cesosag.settings Omarchy shell plugin.",
+        "-- Custom Lua is preserved below the marker; use Setup → Input or the editor.",
+        "",
+        "hl.config({",
+        "  input = {",
+    ]
+    top = []
+    touch = []
+    mapping = [
+        ("repeat_rate", top),
+        ("repeat_delay", top),
+        ("numlock_by_default", top),
+        ("sensitivity", top),
+        ("accel_profile", top),
+        ("natural_scroll", touch),
+        ("clickfinger_behavior", touch),
+        ("scroll_factor", touch),
+        ("disable_while_typing", touch),
+        ("drag_3fg", touch),
+    ]
+    for key, bucket in mapping:
+        lit = _lua_literal(settings.get(key))
+        if lit is None:
+            continue
+        bucket.append(f"    {key} = {lit},")
+
+    lines.extend(top)
+    if touch:
+        lines.append("    touchpad = {")
+        # Fix indentation for touchpad keys (already 4 spaces; need 6)
+        for row in touch:
+            lines.append("  " + row)
+        lines.append("    },")
+    lines.append("  },")
+    lines.append("})")
+    lines.append("")
+
+    if settings.get("workspace_gesture"):
+        lines.append("-- Three-finger horizontal swipe changes workspaces.")
+        lines.append("-- scale < 1 slows the swipe (more finger travel per workspace).")
+        lines.append("hl.config({")
+        lines.append("  gestures = {")
+        lines.append("    workspace_swipe_distance = 450,")
+        lines.append("  },")
+        lines.append("})")
+        lines.append(
+            'hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace", scale = 0.55 })'
+        )
+        lines.append("")
+
+    return "\n".join(lines) + wrap_custom(custom)
+
+
+def get_input() -> dict:
+    path = PATHS["input"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    data = parse_input(text)
+    if not data.get("_has_markers") and text.strip():
+        # Expose migrated custom preview without writing yet.
+        data["_custom"] = migrate_input_custom(text)
+    # Drop internal flags for JSON output to the GUI.
+    out = {k: v for k, v in data.items() if not k.startswith("_")}
+    out["customPresent"] = bool(data.get("_custom", "").strip())
+    return out
+
+
+def set_input(payload: dict) -> None:
+    path = PATHS["input"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+    else:
+        custom = migrate_input_custom(text)
+    settings = dict(INPUT_DEFAULTS)
+    for key in INPUT_DEFAULTS:
+        if key in payload:
+            settings[key] = payload[key]
+    backup(path)
+    write_atomic(path, render_input(settings, custom))
+    hypr_reload()
+    print("input updated")
+
+
+# ---- bindings --------------------------------------------------------------
+
+BIND_RE = re.compile(
+    r"""^(?P<kind>o\.bind|o\.rebind|hl\.unbind)\(\s*(?P<body>.*)\)\s*$""",
+    re.MULTILINE,
+)
+
+
+def _parse_bind_args(body: str) -> dict | None:
+    # keys string first
+    m = re.match(r'^"([^"]*)"\s*(?:,\s*(.*))?$', body.strip())
+    if not m:
+        return None
+    keys = m.group(1)
+    rest = (m.group(2) or "").strip()
+    if not rest:
+        return {"keys": keys, "label": "", "command": ""}
+    # unbind only has keys
+    # label can be nil or "string"
+    label = ""
+    command = ""
+    if rest.startswith("nil"):
+        rest = rest[3:].lstrip()
+        if rest.startswith(","):
+            rest = rest[1:].strip()
+    else:
+        lm = re.match(r'^"([^"]*)"\s*(?:,\s*(.*))?$', rest)
+        if lm:
+            label = lm.group(1)
+            rest = (lm.group(2) or "").strip()
+        else:
+            return {"keys": keys, "label": "", "command": rest}
+    if not rest:
+        return {"keys": keys, "label": label, "command": ""}
+    if rest.startswith('"') and rest.endswith('"'):
+        command = rest[1:-1]
+    else:
+        # table / expression — keep as raw Lua command expression
+        command = rest
+    return {"keys": keys, "label": label, "command": command}
+
+
+def parse_bindings(text: str) -> dict:
+    managed, custom = split_custom(text)
+    source = managed if CUSTOM_BEGIN in text else text
+    bindings = []
+    for m in BIND_RE.finditer(source):
+        kind = {"o.bind": "bind", "o.rebind": "rebind", "hl.unbind": "unbind"}[m.group("kind")]
+        parsed = _parse_bind_args(m.group("body"))
+        if not parsed:
+            continue
+        # Skip pure comment examples by requiring the match line not start with --
+        line_start = source.rfind("\n", 0, m.start()) + 1
+        if source[line_start:m.start()].strip().startswith("--"):
+            continue
+        # Also skip if the matched line itself is commented
+        if source[line_start:line_start + 2] == "--":
+            continue
+        bindings.append({"kind": kind, **parsed})
+    return {
+        "bindings": bindings,
+        "customPresent": bool(custom.strip()) if CUSTOM_BEGIN in text else False,
+        "_custom": custom if CUSTOM_BEGIN in text else "",
+        "_has_markers": CUSTOM_BEGIN in text,
+        "_raw": text,
+    }
+
+
+def migrate_bindings_custom(text: str) -> str:
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+        return custom
+    # Keep only non-matching / commented content as custom? Prefer: keep
+    # lines that aren't active bind/rebind/unbind calls.
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if BIND_RE.match(stripped):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip("\n")
+
+
+def render_bindings(bindings: list, custom: str) -> str:
+    out = [
+        "-- Keybinding overrides managed by the cesosag.settings Omarchy shell plugin.",
+        "-- Browse defaults with: omarchy menu keybindings --print",
+        "",
+    ]
+    for b in bindings:
+        kind = b.get("kind") or "bind"
+        keys = str(b.get("keys") or "").strip()
+        if not keys:
+            continue
+        keys_l = json.dumps(keys)
+        if kind == "unbind":
+            out.append(f"hl.unbind({keys_l})")
+            continue
+        label = b.get("label")
+        command = str(b.get("command") or "").strip()
+        fn = "o.rebind" if kind == "rebind" else "o.bind"
+        label_l = "nil" if label in (None, "") else json.dumps(str(label))
+        if command.startswith("{") or command.startswith("function"):
+            cmd_l = command
+        else:
+            cmd_l = json.dumps(command)
+        out.append(f"{fn}({keys_l}, {label_l}, {cmd_l})")
+    out.append("")
+    return "\n".join(out) + wrap_custom(custom)
+
+
+def get_bindings() -> dict:
+    path = PATHS["bindings"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    data = parse_bindings(text)
+    if not data["_has_markers"] and text.strip():
+        # Active binds already listed; custom empty until first save migrates leftovers.
+        data["customPresent"] = bool(migrate_bindings_custom(text).strip())
+    return {"bindings": data["bindings"], "customPresent": data["customPresent"]}
+
+
+def set_bindings(payload: dict) -> None:
+    path = PATHS["bindings"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+    else:
+        custom = migrate_bindings_custom(text)
+    bindings = payload.get("bindings") or []
+    if not isinstance(bindings, list):
+        fail("bindings must be a list")
+    backup(path)
+    write_atomic(path, render_bindings(bindings, custom))
+    hypr_reload()
+    print("bindings updated")
+
+
+# ---- hyprland --------------------------------------------------------------
+
+HYPRLAND_HEADER = '''-- Learn how to configure Hyprland: https://wiki.hypr.land/Configuring/Start/
+
+-- Omarchy's bootstrap keeps path setup out of this user config.
+dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
+
+'''
+
+HYPRLAND_REQUIRES = '''-- Load Omarchy defaults.
+require("default.hypr.omarchy")
+
+-- Put your personal overrides in these files. They're loaded after Omarchy's
+-- defaults so package updates can improve the defaults without rewriting your
+-- ~/.config/hypr files.
+require("hypr.monitors")
+require("hypr.input")
+require("hypr.bindings")
+require("hypr.looknfeel")
+require("hypr.autostart")
+
+-- Toggle config flags dynamically.
+require("default.hypr.toggles")
+'''
+
+
+def parse_hyprland(text: str) -> dict:
+    managed, custom = split_custom(text)
+    source = managed if CUSTOM_BEGIN in text else text
+    default_bindings = True
+    preinstalled = True
+    # Uncommented assignment wins.
+    if re.search(r"(?m)^omarchy_default_bindings\s*=\s*false\b", source):
+        default_bindings = False
+    if re.search(r"(?m)^omarchy_preinstalled_bindings\s*=\s*false\b", source):
+        preinstalled = False
+    return {
+        "defaultBindings": default_bindings,
+        "preinstalledBindings": preinstalled,
+        "customPresent": bool(custom.strip()) if CUSTOM_BEGIN in text else False,
+        "_custom": custom if CUSTOM_BEGIN in text else "",
+        "_has_markers": CUSTOM_BEGIN in text,
+        "_raw": text,
+    }
+
+
+def migrate_hyprland_custom(text: str) -> str:
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+        return custom
+    # Everything after require("default.hypr.toggles") is user custom.
+    m = re.search(r'(?m)^require\("default\.hypr\.toggles"\)\s*$', text)
+    if m:
+        return text[m.end():].lstrip("\n")
+    matches = list(re.finditer(r"(?m)^require\([^\n]*\)\s*$", text))
+    if matches:
+        return text[matches[-1].end():].lstrip("\n")
+    return ""
+
+
+def render_hyprland(settings: dict, custom: str) -> str:
+    flags = []
+    if settings.get("defaultBindings") is False:
+        flags.append("omarchy_default_bindings = false")
+    else:
+        flags.append("-- omarchy_default_bindings = false")
+    if settings.get("preinstalledBindings") is False:
+        flags.append("omarchy_preinstalled_bindings = false")
+    else:
+        flags.append("-- omarchy_preinstalled_bindings = false")
+    body = (
+        HYPRLAND_HEADER
+        + "-- Binding pack switches (managed by cesosag.settings).\n"
+        + "\n".join(flags)
+        + "\n\n"
+        + HYPRLAND_REQUIRES
+        + "\n"
+        + wrap_custom(custom)
+    )
+    return body
+
+
+def get_hyprland() -> dict:
+    path = PATHS["hyprland"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    data = parse_hyprland(text)
+    if not data["_has_markers"] and text.strip():
+        data["customPresent"] = bool(migrate_hyprland_custom(text).strip())
+    return {
+        "defaultBindings": data["defaultBindings"],
+        "preinstalledBindings": data["preinstalledBindings"],
+        "customPresent": data["customPresent"],
+    }
+
+
+def set_hyprland(payload: dict) -> None:
+    path = PATHS["hyprland"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+    else:
+        custom = migrate_hyprland_custom(text)
+    settings = {
+        "defaultBindings": payload.get("defaultBindings", True),
+        "preinstalledBindings": payload.get("preinstalledBindings", True),
+    }
+    backup(path)
+    write_atomic(path, render_hyprland(settings, custom))
+    hypr_reload()
+    print("hyprland updated")
+
+
+# ---- looknfeel -------------------------------------------------------------
+
+LOOKNFEEL_DEFAULTS = {
+    "gaps_in": 5,
+    "gaps_out": 10,
+    "border_size": 2,
+    "layout": "dwindle",
+    "rounding": 0,
+    "dim_inactive": False,
+    "dim_strength": 0.15,
+    "animations": True,
+    "resize_on_border": True,
+}
+
+
+def hypr_option(name: str):
+    try:
+        raw = subprocess.check_output(["hyprctl", "-j", "getoption", name], text=True)
+        data = json.loads(raw)
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
+        return None
+    if "int" in data and data["int"] is not None:
+        return data["int"]
+    if "float" in data and data["float"] is not None:
+        return data["float"]
+    if "str" in data and data["str"] not in (None, ""):
+        return data["str"]
+    return None
+
+
+def live_looknfeel() -> dict:
+    out = dict(LOOKNFEEL_DEFAULTS)
+    mapping = {
+        "gaps_in": "general:gaps_in",
+        "gaps_out": "general:gaps_out",
+        "border_size": "general:border_size",
+        "layout": "general:layout",
+        "rounding": "decoration:rounding",
+        "dim_inactive": "decoration:dim_inactive",
+        "dim_strength": "decoration:dim_strength",
+        "animations": "animations:enabled",
+        "resize_on_border": "general:resize_on_border",
+    }
+    for key, opt in mapping.items():
+        value = hypr_option(opt)
+        if value is None:
+            continue
+        if key in ("dim_inactive", "animations", "resize_on_border"):
+            out[key] = bool(value) if not isinstance(value, bool) else value
+            if isinstance(value, (int, float)) and key != "dim_strength":
+                out[key] = bool(int(value))
+        elif key in ("gaps_in", "gaps_out", "border_size", "rounding"):
+            out[key] = int(value)
+        elif key == "dim_strength":
+            out[key] = float(value)
+        else:
+            out[key] = str(value)
+    return out
+
+
+def parse_looknfeel_file(text: str) -> dict:
+    data = {}
+    source = active_lines(text)
+    for key, kind in (
+        ("gaps_in", "int"),
+        ("gaps_out", "int"),
+        ("border_size", "int"),
+        ("rounding", "int"),
+        ("dim_strength", "float"),
+        ("layout", "str"),
+        ("dim_inactive", "bool"),
+        ("resize_on_border", "bool"),
+    ):
+        if kind == "bool":
+            m = re.search(rf"\b{key}\s*=\s*(true|false)\b", source)
+            if m:
+                data[key] = m.group(1) == "true"
+        elif kind == "int":
+            m = re.search(rf"\b{key}\s*=\s*(-?\d+)\b", source)
+            if m:
+                data[key] = int(m.group(1))
+        elif kind == "float":
+            m = re.search(rf"\b{key}\s*=\s*(-?\d+(?:\.\d+)?)\b", source)
+            if m:
+                data[key] = float(m.group(1))
+        else:
+            m = re.search(rf'\b{key}\s*=\s*"([^"]*)"', source)
+            if m:
+                data[key] = m.group(1)
+    m = re.search(r"animations\s*=\s*\{\s*enabled\s*=\s*(true|false)", source, re.S)
+    if m:
+        data["animations"] = m.group(1) == "true"
+    return data
+
+
+def migrate_looknfeel_custom(text: str) -> str:
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+        return custom
+    # Preserve the whole original (animation curves, commented examples, etc.).
+    # Managed hl.config is written above the marker on first GUI save.
+    return text.strip("\n")
+
+
+def render_looknfeel(settings: dict, custom: str) -> str:
+    gaps_in = int(settings.get("gaps_in", 5))
+    gaps_out = int(settings.get("gaps_out", 10))
+    border_size = int(settings.get("border_size", 2))
+    layout = str(settings.get("layout") or "dwindle")
+    rounding = int(settings.get("rounding", 0))
+    dim_inactive = bool(settings.get("dim_inactive", False))
+    dim_strength = float(settings.get("dim_strength", 0.15))
+    animations = bool(settings.get("animations", True))
+    resize_on_border = bool(settings.get("resize_on_border", True))
+
+    body = f'''-- Look & feel managed by cesosag.settings.
+-- Custom Lua is preserved below the marker.
+
+hl.config({{
+  general = {{
+    gaps_in = {gaps_in},
+    gaps_out = {gaps_out},
+    border_size = {border_size},
+    resize_on_border = {"true" if resize_on_border else "false"},
+    layout = {json.dumps(layout)},
+  }},
+
+  decoration = {{
+    rounding = {rounding},
+    dim_inactive = {"true" if dim_inactive else "false"},
+    dim_strength = {dim_strength},
+  }},
+
+  animations = {{
+    enabled = {"true" if animations else "false"},
+  }},
+}})
+'''
+    return body + wrap_custom(custom)
+
+
+def get_looknfeel() -> dict:
+    path = PATHS["looknfeel"]
+    live = live_looknfeel()
+    if path.is_file():
+        parsed = parse_looknfeel_file(path.read_text(encoding="utf-8"))
+        live.update({k: v for k, v in parsed.items() if v is not None})
+    live["customPresent"] = bool(
+        path.is_file() and CUSTOM_BEGIN in path.read_text(encoding="utf-8")
+    ) if path.is_file() else False
+    # Detect workspace animation custom without markers
+    if path.is_file() and "hl.animation" in path.read_text(encoding="utf-8"):
+        live["customPresent"] = True
+    return live
+
+
+def set_looknfeel(payload: dict) -> None:
+    path = PATHS["looknfeel"]
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if CUSTOM_BEGIN in text:
+        _, custom = split_custom(text)
+    else:
+        custom = migrate_looknfeel_custom(text)
+    settings = dict(LOOKNFEEL_DEFAULTS)
+    for key in LOOKNFEEL_DEFAULTS:
+        if key in payload and payload[key] is not None:
+            settings[key] = payload[key]
+    backup(path)
+    write_atomic(path, render_looknfeel(settings, custom))
+    hypr_reload()
+    print("looknfeel updated")
+
+
+# ---- cli -------------------------------------------------------------------
+
+def main(argv: list[str]) -> None:
+    if len(argv) < 2 or argv[0] not in ("get", "set"):
+        fail(__doc__.strip())
+    action, target = argv[0], argv[1] if len(argv) > 1 else ""
+    if target not in PATHS:
+        fail(f"unknown target: {target}")
+
+    if action == "get":
+        if target == "input":
+            print(json.dumps(get_input()))
+        elif target == "bindings":
+            print(json.dumps(get_bindings()))
+        elif target == "bindings-catalog":
+            print(json.dumps(bindings_catalog.get_catalog()))
+        elif target == "looknfeel":
+            print(json.dumps(get_looknfeel()))
+        else:
+            print(json.dumps(get_hyprland()))
+        return
+
+    if len(argv) < 3:
+        fail("set requires JSON payload")
+    try:
+        payload = json.loads(argv[2])
+    except json.JSONDecodeError as e:
+        fail(f"invalid JSON: {e}")
+    if not isinstance(payload, dict):
+        fail("payload must be a JSON object")
+
+    if target == "input":
+        set_input(payload)
+    elif target == "bindings":
+        set_bindings(payload)
+    elif target == "bindings-catalog":
+        bindings_catalog.set_catalog(payload)
+    elif target == "looknfeel":
+        set_looknfeel(payload)
+    else:
+        set_hyprland(payload)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+

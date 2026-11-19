@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Schema-driven settings backend for cesosag.settings.
+
+Usage:
+  settings list
+  settings schema <section>
+  settings get <section>
+  settings set <section> '<json>'
+  settings enable | ensure | disable | status
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+PLUGIN_DIR = Path(__file__).resolve().parent.parent
+SCHEMAS = PLUGIN_DIR / "schemas"
+BIN = PLUGIN_DIR / "bin"
+MENU_SRC = PLUGIN_DIR / "menu" / "omarchy-menu.jsonc"
+MENU_DST = Path.home() / ".config" / "omarchy" / "extensions" / "omarchy-menu.jsonc"
+SHELL_JSON = Path.home() / ".config" / "omarchy" / "shell.json"
+PLUGIN_ID = "cesosag.settings"
+
+sys.path.insert(0, str(BIN))
+import conf_settings  # noqa: E402
+
+
+def fail(msg: str, code: int = 1) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def load_index() -> dict:
+    return json.loads((SCHEMAS / "index.json").read_text(encoding="utf-8"))
+
+
+def load_schema(section: str) -> dict:
+    index = load_index()
+    entry = next((s for s in index["sections"] if s["id"] == section), None)
+    if not entry:
+        fail(f"unknown section: {section}")
+    path = SCHEMAS / entry["schema"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["_index"] = entry
+    return data
+
+
+def run_lua(action: str, target: str, payload: dict | None = None) -> dict | str:
+    cmd = ["python3", str(BIN / "lua-settings"), action, target]
+    if payload is not None:
+        cmd.append(json.dumps(payload))
+    out = subprocess.check_output(cmd, text=True)
+    if action == "get":
+        return json.loads(out)
+    return out.strip()
+
+
+def get_shell() -> dict:
+    data = {}
+    if SHELL_JSON.is_file():
+        try:
+            data = json.loads(SHELL_JSON.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+    idle = data.get("idle") or {}
+    dock = data.get("dock") or {}
+    bar = data.get("bar") or {}
+    bg = bar.get("background")
+    if not bg and bar.get("transparent") is True:
+        bg = "none"
+    return {
+        "screensaverMinutes": int(round((idle.get("screensaver") or 0) / 60)),
+        "lockMinutes": int(round((idle.get("lock") or 0) / 60)),
+        "dockPosition": dock.get("position") or "bottom",
+        "dockAutohide": dock.get("autohide") is True,
+        "barPosition": bar.get("position") or "top",
+        "barBackground": bg or "opaque",
+    }
+
+
+def set_shell(payload: dict) -> None:
+    body = {
+        "screensaver": int(payload.get("screensaverMinutes", 0)) * 60,
+        "lock": int(payload.get("lockMinutes", 0)) * 60,
+        "dockPosition": payload.get("dockPosition", "bottom"),
+        "dockAutohide": bool(payload.get("dockAutohide", False)),
+        "barPosition": payload.get("barPosition", "top"),
+        "barBackground": payload.get("barBackground", "opaque"),
+    }
+    subprocess.check_call(["bash", str(BIN / "set-shell"), json.dumps(body)])
+
+
+def get_hyprland_compose() -> dict:
+    hypr = run_lua("get", "hyprland")
+    look = run_lua("get", "looknfeel")
+    out = {}
+    if isinstance(hypr, dict):
+        out.update(hypr)
+    if isinstance(look, dict):
+        out.update(look)
+    # Prefer true if either file has custom
+    out["customPresent"] = bool(hypr.get("customPresent") or look.get("customPresent"))
+    return out
+
+
+def set_hyprland_compose(payload: dict, schema: dict) -> None:
+    hypr_keys = set()
+    look_keys = set()
+    for field in schema.get("fields") or []:
+        if not field.get("key"):
+            continue
+        backend = field.get("backend") or "hyprland"
+        if backend == "hyprland":
+            hypr_keys.add(field["key"])
+        elif backend == "looknfeel":
+            look_keys.add(field["key"])
+    hypr_payload = {k: payload[k] for k in hypr_keys if k in payload}
+    look_payload = {k: payload[k] for k in look_keys if k in payload}
+    if hypr_payload:
+        run_lua("set", "hyprland", hypr_payload)
+    if look_payload:
+        run_lua("set", "looknfeel", look_payload)
+
+
+def normalize_for_schema(schema: dict, values: dict) -> dict:
+    out = dict(values)
+    for field in schema.get("fields") or []:
+        key = field.get("key")
+        if not key:
+            continue
+        ftype = field.get("type")
+        if key not in out or out[key] is None:
+            if "default" in field:
+                out[key] = field["default"]
+            continue
+        if ftype == "bool-int":
+            # UI treats as bool; backend stores 0/1
+            out[key] = 1 if out[key] not in (0, False, None, "0", "") else 0
+        elif ftype == "bool":
+            out[key] = bool(out[key])
+    return out
+
+
+def payload_from_ui(schema: dict, payload: dict) -> dict:
+    out = dict(payload)
+    for field in schema.get("fields") or []:
+        key = field.get("key")
+        if not key or key not in out:
+            continue
+        ftype = field.get("type")
+        if ftype == "bool-int":
+            out[key] = 1 if out[key] in (True, 1, "1") else 0
+        elif ftype == "int":
+            try:
+                out[key] = int(out[key])
+            except (TypeError, ValueError):
+                pass
+        elif ftype == "number":
+            if out[key] == "" or out[key] is None:
+                if field.get("nullable"):
+                    out[key] = None
+            else:
+                try:
+                    n = float(out[key])
+                    out[key] = int(n) if n.is_integer() else n
+                except (TypeError, ValueError):
+                    pass
+    return out
+
+
+def get_section(section: str) -> dict:
+    schema = load_schema(section)
+    kind = schema.get("kind")
+    if kind == "view":
+        fail(f"section '{section}' is a custom view; use its page backend")
+    backend = schema.get("backend")
+    if backend == "shell":
+        values = get_shell()
+    elif backend == "hyprland-compose":
+        values = get_hyprland_compose()
+    elif backend == "hyprsunset":
+        values = conf_settings.get_hyprsunset()
+    elif backend == "xdph":
+        values = conf_settings.get_xdph()
+    elif backend in ("input", "hyprland", "looknfeel", "bindings"):
+        values = run_lua("get", backend)
+    else:
+        fail(f"unsupported backend: {backend}")
+    if not isinstance(values, dict):
+        fail("backend returned non-object")
+    return normalize_for_schema(schema, values)
+
+
+def set_section(section: str, payload: dict) -> None:
+    schema = load_schema(section)
+    if schema.get("kind") == "view":
+        fail(f"section '{section}' is a custom view")
+    payload = payload_from_ui(schema, payload)
+    backend = schema.get("backend")
+    if backend == "shell":
+        set_shell(payload)
+    elif backend == "hyprland-compose":
+        set_hyprland_compose(payload, schema)
+    elif backend == "hyprsunset":
+        conf_settings.set_hyprsunset(payload)
+        return
+    elif backend == "xdph":
+        conf_settings.set_xdph(payload)
+        return
+    elif backend in ("input", "hyprland", "looknfeel", "bindings"):
+        run_lua("set", backend, payload)
+    else:
+        fail(f"unsupported backend: {backend}")
+    print(f"{section} updated")
+
+
+def plugin_enabled() -> bool:
+    if not SHELL_JSON.is_file():
+        return False
+    try:
+        data = json.loads(SHELL_JSON.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    for entry in data.get("plugins") or []:
+        if isinstance(entry, dict) and entry.get("id") == PLUGIN_ID:
+            return True
+        if entry == PLUGIN_ID:
+            return True
+    return False
+
+
+def strip_jsonc(text: str) -> str:
+    """Best-effort JSONC → JSON (line comments + trailing commas)."""
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    esc = False
+    while i < n:
+        ch = text[i]
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i = min(i + 2, n)
+            continue
+        out.append(ch)
+        i += 1
+    cleaned = "".join(out)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    return cleaned
+
+
+def load_jsonc(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(strip_jsonc(text))
+    except json.JSONDecodeError as e:
+        fail(f"could not parse {path}: {e}")
+    if not isinstance(data, dict):
+        fail(f"{path} must contain a JSON object")
+    return data
+
+
+def our_menu_keys() -> list[str]:
+    return list(load_jsonc(MENU_SRC).keys())
+
+
+def menu_installed() -> bool:
+    if not MENU_DST.is_file():
+        return False
+    existing = load_jsonc(MENU_DST)
+    ours = load_jsonc(MENU_SRC)
+    if not ours:
+        return False
+    for key, value in ours.items():
+        if existing.get(key) != value:
+            return False
+    return True
+
+
+def write_menu_jsonc(data: dict) -> None:
+    body = json.dumps(data, indent=2, ensure_ascii=False)
+    content = (
+        "{\n"
+        "  // Merged by cesosag.settings (Setup → GUI).\n"
+        "  // Plugin keys are updated on enable/ensure; other keys are kept.\n"
+        "  // Disable with: bin/settings disable\n"
+        "\n"
+        + body[1:].lstrip("\n")
+    )
+    if not content.endswith("\n"):
+        content += "\n"
+    MENU_DST.parent.mkdir(parents=True, exist_ok=True)
+    tmp = MENU_DST.with_suffix(".jsonc.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(MENU_DST)
+
+
+def install_menu() -> None:
+    if not MENU_SRC.is_file():
+        fail(f"menu template missing: {MENU_SRC}")
+    ours = load_jsonc(MENU_SRC)
+    existing = load_jsonc(MENU_DST) if MENU_DST.is_file() else {}
+    if MENU_DST.is_file():
+        shutil.copy2(MENU_DST, MENU_DST.with_suffix(".jsonc.bak.settings"))
+    merged = dict(existing)
+    merged.update(ours)
+    write_menu_jsonc(merged)
+    print(f"menu overrides merged -> {MENU_DST} ({len(ours)} keys)")
+
+
+def uninstall_menu() -> None:
+    if not MENU_DST.is_file():
+        print("menu overrides already absent")
+        return
+    existing = load_jsonc(MENU_DST)
+    ours = set(our_menu_keys())
+    if not any(k in existing for k in ours):
+        print("menu overrides do not include cesosag.settings keys; left untouched")
+        return
+    remaining = {k: v for k, v in existing.items() if k not in ours}
+    if not remaining:
+        MENU_DST.unlink()
+        print(f"removed {MENU_DST} (Setup falls back to Omarchy defaults / editors)")
+        return
+    write_menu_jsonc(remaining)
+    print(f"removed cesosag.settings menu keys; left {len(remaining)} other override(s)")
+
+
+def cmd_enable() -> None:
+    subprocess.check_call(["omarchy", "plugin", "enable", PLUGIN_ID])
+    install_menu()
+    print("cesosag.settings enabled")
+
+
+def cmd_ensure() -> None:
+    """Idempotent post-install: enable plugin + merge Setup menu overrides."""
+    changed = False
+    if not plugin_enabled():
+        subprocess.check_call(["omarchy", "plugin", "enable", PLUGIN_ID])
+        changed = True
+    if not menu_installed():
+        install_menu()
+        changed = True
+    if changed:
+        print("cesosag.settings ensured (plugin + menu)")
+    else:
+        print("cesosag.settings already ensured")
+
+
+def cmd_disable() -> None:
+    uninstall_menu()
+    subprocess.check_call(["omarchy", "plugin", "disable", PLUGIN_ID])
+    print("cesosag.settings disabled (Setup opens config editors again)")
+
+
+def cmd_status() -> None:
+    print(json.dumps({
+        "pluginId": PLUGIN_ID,
+        "enabled": plugin_enabled(),
+        "menuInstalled": menu_installed(),
+        "sections": [s["id"] for s in load_index()["sections"]],
+    }, indent=2, ensure_ascii=False))
+
+
+def main(argv: list[str]) -> None:
+    if not argv:
+        fail(__doc__.strip())
+    cmd = argv[0]
+    if cmd == "list":
+        print(json.dumps(load_index(), indent=2, ensure_ascii=False))
+        return
+    if cmd == "status":
+        cmd_status()
+        return
+    if cmd == "enable":
+        cmd_enable()
+        return
+    if cmd == "ensure":
+        cmd_ensure()
+        return
+    if cmd == "disable":
+        cmd_disable()
+        return
+    if cmd == "schema":
+        if len(argv) < 2:
+            fail("settings schema <section>")
+        print(json.dumps(load_schema(argv[1]), indent=2, ensure_ascii=False))
+        return
+    if cmd == "get":
+        if len(argv) < 2:
+            fail("settings get <section>")
+        print(json.dumps(get_section(argv[1]), ensure_ascii=False))
+        return
+    if cmd == "set":
+        if len(argv) < 3:
+            fail("settings set <section> '<json>'")
+        try:
+            payload = json.loads(argv[2])
+        except json.JSONDecodeError as e:
+            fail(f"invalid JSON: {e}")
+        if not isinstance(payload, dict):
+            fail("payload must be a JSON object")
+        set_section(argv[1], payload)
+        return
+    fail(__doc__.strip())
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

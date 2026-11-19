@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+
+# Apply shell.json-related settings from a JSON object:
+# { "screensaver": <sec>, "lock": <sec>, "dockPosition": "...", "dockAutohide": bool,
+#   "barPosition": "...", "barBackground": "..." }
+
+payload="${1-}"
+[[ -n $payload ]] || { echo "missing JSON payload" >&2; exit 1; }
+
+screensaver=$(printf '%s' "$payload" | jq -er '.screensaver')
+lock=$(printf '%s' "$payload" | jq -er '.lock')
+dock_position=$(printf '%s' "$payload" | jq -er '.dockPosition')
+dock_autohide=$(printf '%s' "$payload" | jq -er 'if .dockAutohide == true then "on" else "off" end')
+bar_position=$(printf '%s' "$payload" | jq -er '.barPosition')
+bar_background=$(printf '%s' "$payload" | jq -er '.barBackground')
+
+[[ $screensaver =~ ^[0-9]+$ ]] || { echo "screensaver must be an integer" >&2; exit 1; }
+[[ $lock =~ ^[0-9]+$ ]] || { echo "lock must be an integer" >&2; exit 1; }
+[[ $dock_position =~ ^(top|bottom|left|right)$ ]] || { echo "invalid dock position" >&2; exit 1; }
+[[ $bar_position =~ ^(top|bottom|left|right)$ ]] || { echo "invalid bar position" >&2; exit 1; }
+[[ $bar_background =~ ^(opaque|glassy|none)$ ]] || { echo "invalid bar background" >&2; exit 1; }
+
+source omarchy-shell-config
+
+commit "$NORMALIZE
+  | .idle = ((.idle // {}) | object_or_empty
+      | .screensaver = (\$screensaver | tonumber)
+      | .lock = (\$lock | tonumber))
+  | .dock = ((.dock // {}) | object_or_empty
+      | .position = \$dock_position
+      | .autohide = (\$dock_autohide == \"on\"))
+  | .bar = ((.bar // {}) | object_or_empty
+      | .position = \$bar_position
+      | .background = \$bar_background
+      | del(.transparent))" \
+  --arg screensaver "$screensaver" \
+  --arg lock "$lock" \
+  --arg dock_position "$dock_position" \
+  --arg dock_autohide "$dock_autohide" \
+  --arg bar_position "$bar_position" \
+  --arg bar_background "$bar_background"
+
+printf 'shell idle=%s/%s dock=%s autohide=%s bar=%s bg=%s\n' \
+  "$screensaver" "$lock" "$dock_position" "$dock_autohide" "$bar_position" "$bar_background"

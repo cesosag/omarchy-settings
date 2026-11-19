@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Repeatable checks for cesosag.settings.
+
+Usage:
+  python3 bin/selftest           # run all automated checks
+  python3 bin/selftest open      # section open routing only
+  python3 bin/selftest backend   # get/set round-trips only
+  python3 bin/selftest schema    # schema catalog integrity only
+
+Exit 0 only if every selected check passes.
+
+Manual auto-apply checklist (GUI — not automated here):
+  1. Open Shell → change screensaver minutes (no Apply button) → status shows
+     Saving… then Saved; last-apply.json status=ok.
+  2. Open Input → flip a toggle twice quickly → both saves land (debounce + queue).
+  3. Open Hyprland → change gaps → values persist after reopen.
+  4. From Setup menu, open each row and confirm the window title matches.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PLUGIN = Path(__file__).resolve().parent.parent
+SETTINGS = PLUGIN / "bin" / "settings"
+STATE = Path.home() / ".local" / "state" / "omarchy" / "cesosag.settings"
+SECTIONS = ["shell", "monitors", "input", "keybindings", "hyprland", "hyprsunset", "xdph"]
+FORM_SECTIONS = ["shell", "input", "hyprland", "hyprsunset", "xdph"]
+
+
+class Checker:
+    def __init__(self) -> None:
+        self.failed = 0
+        self.passed = 0
+        self.rows: list[dict] = []
+
+    def check(self, name: str, ok: bool, detail: str = "") -> None:
+        self.rows.append({"name": name, "ok": ok, "detail": detail})
+        if ok:
+            self.passed += 1
+            print(f"PASS  {name}" + (f"  ({detail})" if detail else ""))
+        else:
+            self.failed += 1
+            print(f"FAIL  {name}" + (f"  ({detail})" if detail else ""))
+
+    def run(self, args: list[str]) -> str:
+        return subprocess.check_output(["python3", str(SETTINGS), *args], text=True)
+
+
+def settings_titles() -> list[str]:
+    raw = subprocess.check_output(["hyprctl", "-j", "clients"], text=True)
+    clients = json.loads(raw)
+    return [c.get("title") or "" for c in clients if (c.get("title") or "").startswith("Settings")]
+
+
+def hide_panel() -> None:
+    subprocess.run(["omarchy-shell", "shell", "hide", "cesosag.settings"], capture_output=True)
+
+
+def summon(section: str) -> None:
+    subprocess.run(
+        ["omarchy-shell", "shell", "summon", "cesosag.settings", section],
+        capture_output=True,
+        check=False,
+    )
+
+
+def wait_title(expected: str, timeout: float = 4.0) -> str | None:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        titles = settings_titles()
+        if titles:
+            last = titles[0]
+            if last == expected:
+                return last
+        time.sleep(0.12)
+    return last
+
+
+def read_last_open() -> dict:
+    path = STATE / "last-open.json"
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def test_schema(c: Checker) -> None:
+    index = json.loads(c.run(["list"]))
+    ids = [s["id"] for s in index.get("sections") or []]
+    c.check("catalog.order", ids == SECTIONS, str(ids))
+    for sid in SECTIONS:
+        schema = json.loads(c.run(["schema", sid]))
+        c.check(f"schema.{sid}.id", schema.get("id") == sid, str(schema.get("id")))
+        kind = schema.get("kind")
+        c.check(f"schema.{sid}.kind", kind in ("form", "view"), str(kind))
+        if kind == "form":
+            fields = schema.get("fields") or []
+            c.check(f"schema.{sid}.fields", len(fields) > 0, str(len(fields)))
+            c.check(f"schema.{sid}.backend", bool(schema.get("backend")), str(schema.get("backend")))
+
+
+def test_backend(c: Checker) -> None:
+    # shell
+    orig = json.loads(c.run(["get", "shell"]))
+    mod = dict(orig)
+    mod["screensaverMinutes"] = int(orig.get("screensaverMinutes") or 0) + 1
+    c.run(["set", "shell", json.dumps(mod)])
+    after = json.loads(c.run(["get", "shell"]))
+    c.check("backend.shell.set", after.get("screensaverMinutes") == mod["screensaverMinutes"])
+    c.run(["set", "shell", json.dumps(orig)])
+
+    # input toggle
+    orig = json.loads(c.run(["get", "input"]))
+    mod = dict(orig)
+    mod["natural_scroll"] = not bool(orig.get("natural_scroll"))
+    c.run(["set", "input", json.dumps(mod)])
+    after = json.loads(c.run(["get", "input"]))
+    c.check("backend.input.set", bool(after.get("natural_scroll")) == bool(mod["natural_scroll"]))
+    c.run(["set", "input", json.dumps(orig)])
+
+    # hyprland gaps
+    orig = json.loads(c.run(["get", "hyprland"]))
+    mod = dict(orig)
+    mod["gaps_in"] = int(orig.get("gaps_in") or 0) + 1
+    c.run(["set", "hyprland", json.dumps(mod)])
+    after = json.loads(c.run(["get", "hyprland"]))
+    c.check("backend.hyprland.set", int(after.get("gaps_in")) == mod["gaps_in"])
+    c.run(["set", "hyprland", json.dumps(orig)])
+
+    # hyprsunset (.conf)
+    orig = json.loads(c.run(["get", "hyprsunset"]))
+    mod = dict(orig)
+    mod["nightEnabled"] = True
+    mod["nightTime"] = "21:30"
+    mod["temperature"] = 3800
+    c.run(["set", "hyprsunset", json.dumps(mod)])
+    after = json.loads(c.run(["get", "hyprsunset"]))
+    c.check(
+        "backend.hyprsunset.set",
+        after.get("nightEnabled") is True
+        and str(after.get("nightTime")) == "21:30"
+        and int(after.get("temperature")) == 3800,
+        json.dumps({k: after.get(k) for k in ("nightEnabled", "nightTime", "temperature")}),
+    )
+    c.run(["set", "hyprsunset", json.dumps(orig)])
+
+    # xdph (.conf)
+    orig = json.loads(c.run(["get", "xdph"]))
+    mod = dict(orig)
+    mod["allow_token_by_default"] = not bool(orig.get("allow_token_by_default"))
+    c.run(["set", "xdph", json.dumps(mod)])
+    after = json.loads(c.run(["get", "xdph"]))
+    c.check(
+        "backend.xdph.set",
+        bool(after.get("allow_token_by_default")) == bool(mod["allow_token_by_default"]),
+        str(after.get("allow_token_by_default")),
+    )
+    c.run(["set", "xdph", json.dumps(orig)])
+
+    # second consecutive set (Process restart analogue at CLI)
+    c.run(["set", "shell", json.dumps(json.loads(c.run(["get", "shell"])))])
+    c.check("backend.shell.second_set", True, "completed")
+
+
+def test_open(c: Checker) -> None:
+    hide_panel()
+    time.sleep(0.35)
+    for sec in SECTIONS:
+        hide_panel()
+        time.sleep(0.35)
+        summon(sec)
+        expected = f"Settings — {sec}"
+        title = wait_title(expected)
+        c.check(f"open.cold.{sec}", title == expected, f"title={title!r}")
+        probe = read_last_open()
+        c.check(
+            f"open.probe.{sec}",
+            probe.get("resolved") == sec and probe.get("requested") in (sec, "idle" if sec == "shell" else sec),
+            json.dumps(probe),
+        )
+
+    # switch while open
+    summon("shell")
+    time.sleep(0.4)
+    for sec in ("input", "hyprland", "monitors", "keybindings"):
+        summon(sec)
+        expected = f"Settings — {sec}"
+        title = wait_title(expected)
+        c.check(f"open.switch.{sec}", title == expected, f"title={title!r}")
+
+    hide_panel()
+
+
+def main(argv: list[str]) -> int:
+    which = argv[0] if argv else "all"
+    c = Checker()
+    try:
+        if which in ("all", "schema"):
+            test_schema(c)
+        if which in ("all", "backend"):
+            test_backend(c)
+        if which in ("all", "open"):
+            test_open(c)
+    except subprocess.CalledProcessError as e:
+        c.check("subprocess", False, str(e))
+    except FileNotFoundError as e:
+        c.check("dependency", False, str(e))
+
+    report = {
+        "passed": c.passed,
+        "failed": c.failed,
+        "rows": c.rows,
+    }
+    STATE.mkdir(parents=True, exist_ok=True)
+    (STATE / "selftest-last.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(f"\n{c.passed} passed, {c.failed} failed")
+    manual = __doc__.split("Manual auto-apply checklist", 1)
+    if len(manual) > 1:
+        print("Manual auto-apply checklist" + manual[1].rstrip())
+    return 1 if c.failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

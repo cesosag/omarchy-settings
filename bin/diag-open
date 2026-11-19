@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Record the last panel open() for selftest. Args: requested resolved sectionIndex catalogReady."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "omarchy" / "cesosag.settings"
+
+
+def main(argv: list[str]) -> None:
+    requested = argv[0] if len(argv) > 0 else ""
+    resolved = argv[1] if len(argv) > 1 else ""
+    section_index = int(argv[2]) if len(argv) > 2 and str(argv[2]).lstrip("-").isdigit() else -1
+    catalog_ready = argv[3] in ("1", "true", "True") if len(argv) > 3 else False
+    STATE.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "requested": requested,
+        "resolved": resolved,
+        "sectionIndex": section_index,
+        "catalogReady": catalog_ready,
+        "ts": time.time(),
+    }
+    (STATE / "last-open.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

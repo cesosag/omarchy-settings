@@ -1,0 +1,45 @@
+{
+  // Installed by: python3 …/cesosag.settings/bin/settings enable
+  // Removed by:   python3 …/cesosag.settings/bin/settings disable
+  // When the plugin is disabled, this file is removed so Setup falls back to
+  // Omarchy's default "open config editor" actions.
+
+  "setup.idle": {
+    "icon": "󰒲",
+    "label": "Shell",
+    "description": "Idle, dock, and bar (shell.json)",
+    "action": "omarchy-shell shell summon cesosag.settings 'shell'"
+  },
+  "setup.monitors": {
+    "icon": "󰍹",
+    "label": "Monitors",
+    "action": "omarchy-shell shell summon cesosag.settings 'monitors'"
+  },
+  "setup.keybindings": {
+    "icon": "",
+    "label": "Keybindings",
+    "action": "omarchy-shell shell summon cesosag.settings 'keybindings'"
+  },
+  "setup.input": {
+    "icon": "",
+    "label": "Input",
+    "action": "omarchy-shell shell summon cesosag.settings 'input'"
+  },
+  "setup.config.hyprland": {
+    "icon": "",
+    "label": "Hyprland",
+    "action": "omarchy-shell shell summon cesosag.settings 'hyprland'"
+  },
+  "setup.config.hyprsunset": {
+    "icon": "",
+    "label": "Hyprsunset",
+    "description": "Night light schedule (hyprsunset.conf)",
+    "action": "omarchy-shell shell summon cesosag.settings 'hyprsunset'"
+  },
+  "setup.config.xdph": {
+    "icon": "󰹑",
+    "label": "Screen share",
+    "description": "xdg-desktop-portal-hyprland (xdph.conf)",
+    "action": "omarchy-shell shell summon cesosag.settings 'xdph'"
+  }
+}

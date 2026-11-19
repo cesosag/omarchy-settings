@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Record a SchemaPage apply attempt.
+
+Usage:
+  diag-apply <section> <status> [error] [values-json]
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "omarchy" / "cesosag.settings"
+
+
+def main(argv: list[str]) -> None:
+    section = argv[0] if len(argv) > 0 else ""
+    status = argv[1] if len(argv) > 1 else "unknown"
+    error = argv[2] if len(argv) > 2 else ""
+    values = None
+    if len(argv) > 3 and argv[3]:
+        try:
+            values = json.loads(argv[3])
+        except json.JSONDecodeError:
+            values = {"_raw": argv[3]}
+    STATE.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "section": section,
+        "status": status,
+        "error": error,
+        "values": values,
+        "ts": time.time(),
+    }
+    (STATE / "last-apply.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    with (STATE / "apply-history.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\n")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

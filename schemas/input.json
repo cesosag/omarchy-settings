@@ -1,0 +1,90 @@
+{
+  "id": "input",
+  "kind": "form",
+  "titleKey": "input.title",
+  "descriptionKey": "input.description",
+  "backend": "input",
+  "customNoteKey": "input.customNote",
+  "editors": [
+    { "labelKey": "input.openEditor", "path": "~/.config/hypr/input.lua" }
+  ],
+  "fields": [
+    { "type": "section", "titleKey": "input.touchpad" },
+    {
+      "key": "natural_scroll",
+      "type": "bool",
+      "labelKey": "input.naturalScroll",
+      "default": false
+    },
+    {
+      "key": "clickfinger_behavior",
+      "type": "bool",
+      "labelKey": "input.clickfinger",
+      "descriptionKey": "input.clickfingerDesc",
+      "default": false
+    },
+    {
+      "key": "disable_while_typing",
+      "type": "bool",
+      "labelKey": "input.disableWhileTyping",
+      "default": true
+    },
+    {
+      "key": "drag_3fg",
+      "type": "bool-int",
+      "labelKey": "input.drag3fg",
+      "descriptionKey": "input.drag3fgDesc",
+      "default": 0
+    },
+    {
+      "key": "workspace_gesture",
+      "type": "bool",
+      "labelKey": "input.workspaceGesture",
+      "descriptionKey": "input.workspaceGestureDesc",
+      "default": false
+    },
+    {
+      "key": "scroll_factor",
+      "type": "number",
+      "labelKey": "input.scrollFactor",
+      "nullable": true,
+      "placeholder": "0.4"
+    },
+    { "type": "section", "titleKey": "input.pointer" },
+    {
+      "key": "sensitivity",
+      "type": "number",
+      "labelKey": "input.sensitivity",
+      "nullable": true,
+      "placeholder": "0"
+    },
+    {
+      "key": "accel_profile",
+      "type": "enum",
+      "labelKey": "input.accelProfile",
+      "options": ["adaptive", "flat"],
+      "default": "adaptive"
+    },
+    { "type": "section", "titleKey": "input.keyboard" },
+    {
+      "key": "numlock_by_default",
+      "type": "bool",
+      "labelKey": "input.numlock",
+      "default": false
+    },
+    {
+      "key": "repeat_rate",
+      "type": "int",
+      "labelKey": "input.repeatRate",
+      "default": 25,
+      "min": 1
+    },
+    {
+      "key": "repeat_delay",
+      "type": "int",
+      "labelKey": "input.repeatDelay",
+      "default": 600,
+      "min": 1
+    }
+  ]
+}

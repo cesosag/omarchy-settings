@@ -1,0 +1,63 @@
+{
+  "id": "hyprsunset",
+  "kind": "form",
+  "titleKey": "hyprsunset.title",
+  "descriptionKey": "hyprsunset.description",
+  "backend": "hyprsunset",
+  "customNoteKey": "hyprsunset.customNote",
+  "editors": [
+    { "labelKey": "hyprsunset.openEditor", "path": "~/.config/hypr/hyprsunset.conf" }
+  ],
+  "fields": [
+    { "type": "section", "titleKey": "hyprsunset.sectionDay" },
+    {
+      "key": "dayTime",
+      "type": "string",
+      "labelKey": "hyprsunset.dayTime",
+      "placeholder": "07:00",
+      "default": "07:00"
+    },
+    { "type": "section", "titleKey": "hyprsunset.sectionNight" },
+    {
+      "key": "nightEnabled",
+      "type": "bool",
+      "labelKey": "hyprsunset.nightEnabled",
+      "descriptionKey": "hyprsunset.nightEnabledDesc",
+      "default": false
+    },
+    {
+      "key": "nightTime",
+      "type": "string",
+      "labelKey": "hyprsunset.nightTime",
+      "placeholder": "20:00",
+      "default": "20:00",
+      "visibleWhen": { "key": "nightEnabled", "equals": true }
+    },
+    {
+      "key": "temperature",
+      "type": "int",
+      "labelKey": "hyprsunset.temperature",
+      "descriptionKey": "hyprsunset.temperatureDesc",
+      "default": 4000,
+      "min": 1000,
+      "visibleWhen": { "key": "nightEnabled", "equals": true }
+    },
+    {
+      "key": "gamma",
+      "type": "number",
+      "labelKey": "hyprsunset.gamma",
+      "descriptionKey": "hyprsunset.gammaDesc",
+      "nullable": true,
+      "placeholder": "100",
+      "visibleWhen": { "key": "nightEnabled", "equals": true }
+    },
+    { "type": "section", "titleKey": "hyprsunset.sectionAutostart" },
+    {
+      "key": "launchOnStart",
+      "type": "bool",
+      "labelKey": "hyprsunset.launchOnStart",
+      "descriptionKey": "hyprsunset.launchOnStartDesc",
+      "default": false
+    }
+  ]
+}

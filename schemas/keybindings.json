@@ -1,0 +1,7 @@
+{
+  "id": "keybindings",
+  "kind": "view",
+  "view": "KeybindingsPage",
+  "titleKey": "keybindings.title",
+  "descriptionKey": "keybindings.description"
+}

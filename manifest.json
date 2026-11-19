@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "cesosag.settings",
+  "name": "Settings",
+  "version": "1.3.0",
+  "author": "cesosag",
+  "license": "MIT",
+  "description": "Schema-driven Settings GUI for Omarchy (shell.json, Hypr Lua/.conf). Auto-applies; Setup menu via bin/install or first open.",
+  "kinds": [
+    "panel"
+  ],
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}

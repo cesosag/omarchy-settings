@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail
+
+# Write idle.screensaver and idle.lock (seconds) into shell.json.
+# Usage: set-idle <screensaver-seconds> <lock-seconds>
+
+screensaver="${1-}"
+lock="${2-}"
+
+[[ $screensaver =~ ^[0-9]+$ ]] || { echo "screensaver must be a non-negative integer" >&2; exit 1; }
+[[ $lock =~ ^[0-9]+$ ]] || { echo "lock must be a non-negative integer" >&2; exit 1; }
+
+source omarchy-shell-config
+
+commit "$NORMALIZE
+  | .idle = ((.idle // {}) | object_or_empty
+    | .screensaver = (\$screensaver | tonumber)
+    | .lock = (\$lock | tonumber))" \
+  --arg screensaver "$screensaver" \
+  --arg lock "$lock"
+
+printf 'idle screensaver=%ss lock=%ss\n' "$screensaver" "$lock"
